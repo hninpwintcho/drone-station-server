@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+  # ── 1. MQTT Broker (Mosquitto) ──────────────────
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: drone-mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT TCP
+      - "9001:9001"   # MQTT WebSocket (for browser dashboards)
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt_data:/mosquitto/data
+      - mqtt_log:/mosquitto/log
+    networks:
+      - station-net
+
+  # ── 2. RTSP Server (MediaMTX) ──────────────────
+  rtsp:
+    image: bluenviron/mediamtx:latest
+    container_name: drone-rtsp
+    restart: unless-stopped
+    ports:
+      - "8554:8554"   # RTSP ingest
+      - "8888:8888"   # HLS playback
+      - "9997:9997"   # MediaMTX API
+    volumes:
+      - ./mediamtx/mediamtx.yml:/mediamtx.yml
+      - recordings:/recordings
+    networks:
+      - station-net
+
+  # ── 3. Station Control API (FastAPI) ────────────
+  station-api:
+    build:
+      context: ./station-api
+      dockerfile: Dockerfile
+    container_name: drone-station-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MQTT_HOST=mqtt
+      - MQTT_PORT=1883
+      - RTSP_HOST=rtsp
+      - RTSP_API=http://rtsp:9997
+    depends_on:
+      - mqtt
+      - rtsp
+    networks:
+      - station-net
+
+volumes:
+  mqtt_data:
+  mqtt_log:
+  recordings:
+
+networks:
+  station-net:
+    driver: bridge

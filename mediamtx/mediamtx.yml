@@ -1,0 +1,43 @@
+###############################################
+# MediaMTX — Drone Station RTSP Server
+###############################################
+
+logLevel: info
+logDestinations: [stdout]
+
+# Control API
+api: yes
+apiAddress: :9997
+
+# RTSP (Drone video ingest)
+rtsp: yes
+rtspAddress: :8554
+
+# RTMP (disabled — not needed for station)
+rtmp: no
+
+# HLS (Browser playback)
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAllowOrigin: '*'
+
+# SRT (disabled)
+srt: no
+
+# WebRTC (disabled)
+webrtc: no
+
+# Path defaults
+pathDefaults:
+  source: publisher
+
+  # Auto-Recording for all drone streams
+  record: yes
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordSegmentDuration: 1h
+  recordDeleteAfter: 7d
+
+paths:
+  all_others:
