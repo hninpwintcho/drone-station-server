@@ -57,31 +57,200 @@ drone-station-server/
 
 ---
 
-## 🚀 Deploy (One-Stop)
+## 🚀 Step-by-Step Install Guide (Tested on EC2)
 
-### Step 1 — Launch EC2 (Ubuntu 22.04, t3.medium+)
-Paste `ec2-bootstrap.sh` into **EC2 → Advanced → User Data**.
+> ✅ ဤ guide ကို `ip-10-10-2-210` (Public: `15.165.59.154`, Ubuntu 24.04, t3.small) တွင်
+> စမ်းသပ်ပြီးသား ဖြစ်ပါသည်။
 
-Open Security Group ports: **1883, 8000, 8554, 8888, 9001, 9997**
+### Step 1 — EC2 Instance ဖွင့်ခြင်း
 
-### Step 2 — Copy & Start
+1. **AWS Console** → EC2 → Launch Instance
+2. **AMI**: Ubuntu 24.04 LTS
+3. **Instance Type**: `t3.small` (2 vCPU, 2GB RAM, ~$15/mo)
+4. **Storage**: 50GB gp3
+5. **User Data** (Advanced Details): `ec2-bootstrap.sh` ထဲက content ကို paste
+
+### Step 2 — Security Group Ports ဖွင့်ခြင်း
+
+AWS Console → EC2 → Security Groups → Inbound Rules → Edit:
+
+| Port | Protocol | Source | Purpose |
+|------|----------|--------|---------|
+| 22 | TCP | My IP | SSH |
+| 1883 | TCP | 0.0.0.0/0 | MQTT (Dock/Drone) |
+| 8000 | TCP | 0.0.0.0/0 | Station API |
+| 8554 | TCP | 0.0.0.0/0 | RTSP Video Ingest |
+| 8888 | TCP | 0.0.0.0/0 | HLS Browser Playback |
+| 9001 | TCP | 0.0.0.0/0 | MQTT WebSocket |
+| 9997 | TCP | 0.0.0.0/0 | MediaMTX API |
+
+### Step 3 — Files ကို EC2 သို့ တင်ခြင်း
+
 ```bash
-scp -r ~/drone-station-server ubuntu@EC2_IP:~/
-ssh ubuntu@EC2_IP
+# Local machine ကနေ
+scp -r ~/drone-station-server ubuntu@EC2_PUBLIC_IP:~/
+
+# SSH ဝင်ပါ
+ssh ubuntu@EC2_PUBLIC_IP
+```
+
+### Step 4 — Docker Install (User Data မသုံးခဲ့ရင်)
+
+```bash
+bash ~/drone-station-server/ec2-bootstrap.sh
+# ပြီးရင် logout/login ပြန်လုပ်ပါ (docker group အတွက်)
+exit
+ssh ubuntu@EC2_PUBLIC_IP
+```
+
+### Step 5 — Server Start
+
+```bash
 cd ~/drone-station-server
 cp .env.example .env
 docker compose up -d
 ```
 
-### Step 3 — Verify
+### Step 6 — Container Status စစ်ဆေး
+
 ```bash
 docker compose ps
-# Should show 3 containers: drone-mqtt, drone-rtsp, drone-station-api
+```
+
+Expected output:
+```
+NAME                IMAGE                              STATUS    PORTS
+drone-mqtt          eclipse-mosquitto:2                Up        :1883, :9001
+drone-rtsp          bluenviron/mediamtx:latest         Up        :8554, :8888, :9997
+drone-station-api   drone-station-server-station-api   Up        :8000
 ```
 
 ---
 
-## 📡 MQTT Topic Reference
+## 🧪 Testing & Verification (Step-by-Step)
+
+> ⚠️ အောက်ပါ commands အားလုံးကို **EC2 ထဲမှာ** ရိုက်ပါ
+
+### Test 1 — Station API စစ်ဆေးခြင်း
+
+```bash
+curl http://localhost:8000/status
+```
+Expected:
+```json
+{"mqtt":"connected","rtsp":"running","docks_online":0,"drones_online":0}
+```
+
+### Test 2 — RTSP API စစ်ဆေးခြင်း
+
+```bash
+curl http://localhost:9997/v3/paths/list
+```
+Expected:
+```json
+{"itemCount":0,"pageCount":0,"items":[]}
+```
+(`items` ထဲ ဘာမှမရှိတာ ပုံမှန်ပါ — Stream မပို့ရသေးလို့)
+
+### Test 3 — MQTT Pub/Sub စစ်ဆေးခြင်း
+
+```bash
+# MQTT client install
+sudo apt install -y mosquitto-clients
+
+# နားထောင်ပါ (Subscribe)
+mosquitto_sub -h localhost -t 'station/#' -v &
+
+# Dock status simulate (Publish)
+mosquitto_pub -h localhost -t 'station/docks/DOCK01/status' \
+  -m '{"state":"open","battery":85,"temperature":32.5}'
+```
+Expected output:
+```
+station/docks/DOCK01/status {"state":"open","battery":85,"temperature":32.5}
+```
+
+### Test 4 — RTSP Video Stream စစ်ဆေးခြင်း
+
+```bash
+# ffmpeg install
+sudo apt install -y ffmpeg
+
+# Test video stream ပို့ (10 စက္ကန့်ခန့်)
+ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
+  -c:v libx264 -f rtsp rtsp://localhost:8554/test_stream
+```
+
+Stream ပြီးရင် "Broken pipe" ပြပါလိမ့်မယ် — **ပုံမှန်** ပါ (test video ရပ်လို့)။
+နောက် terminal တစ်ခုဖွင့်ပြီး စစ်ဆေးပါ:
+```bash
+curl http://localhost:9997/v3/paths/list
+```
+Expected — `test_stream` ပေါ်လာပါမည်:
+```json
+{"itemCount":1,"items":[{"name":"test_stream","ready":true,"online":true,"tracks":["H264"]}]}
+```
+
+### Test 5 — Station API (Dock/Drone Commands)
+
+```bash
+# Dock command ပို့ကြည့်
+curl -X POST http://localhost:8000/docks/DOCK01/command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "close"}'
+
+# Drone command ပို့ကြည့်
+curl -X POST http://localhost:8000/drones/DJI001/command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "land"}'
+
+# Connected docks/drones ကြည့်
+curl http://localhost:8000/docks
+curl http://localhost:8000/drones
+
+# Active streams ကြည့်
+curl http://localhost:8000/streams
+```
+
+### Test 6 — Multi-Stream (VT001 - VT100)
+
+Config ထဲ ပြင်စရာ မလို — `all_others` path config ဖြင့် ဘယ် name နဲ့ ပို့ပို့ auto-accept:
+```bash
+# VT001
+ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
+  -c:v libx264 -f rtsp rtsp://localhost:8554/VT001
+
+# VT100 (another terminal)
+ffmpeg -re -f lavfi -i testsrc=size=640x480:rate=30 \
+  -c:v libx264 -f rtsp rtsp://localhost:8554/VT100
+
+# စစ်ဆေး
+curl http://localhost:9997/v3/paths/list
+# VT001 ရော VT100 ရော items ထဲတွင် ပေါ်လာပါမည်
+```
+
+### Test 7 — Browser စစ်ဆေးခြင်း (ပြင်ပကနေ)
+
+| Test | URL |
+|------|-----|
+| Station API | `http://EC2_PUBLIC_IP:8000/status` |
+| RTSP Streams | `http://EC2_PUBLIC_IP:9997/v3/paths/list` |
+| HLS Player | `http://EC2_PUBLIC_IP:8888/test_stream` |
+
+---
+
+## ✅ Verification Checklist
+
+| # | Test | Command | Expected |
+|---|------|---------|----------|
+| 1 | Containers running | `docker compose ps` | 3 containers Up |
+| 2 | Station API | `curl localhost:8000/status` | `mqtt: connected` |
+| 3 | RTSP API | `curl localhost:9997/v3/paths/list` | `items: []` (no error) |
+| 4 | MQTT pub/sub | `mosquitto_pub` + `mosquitto_sub` | Message received |
+| 5 | RTSP ingest | `ffmpeg … rtsp://localhost:8554/test` | Stream in API |
+| 6 | Multi-stream | Push VT001, VT100 | Both in API |
+| 7 | Browser | `http://PUBLIC_IP:8000/status` | JSON response |
+
 
 ### Dock Topics
 | Topic | Direction | Description |
