@@ -5,9 +5,27 @@
 logLevel: info
 logDestinations: [stdout]
 
+# Authentication — allow all access
+authMethod: internal
+authInternalUsers:
+- user: any
+  pass:
+  ips: []
+  permissions:
+  - action: publish
+    path:
+  - action: read
+    path:
+  - action: playback
+    path:
+  - action: api
+  - action: metrics
+  - action: pprof
+
 # Control API
 api: yes
 apiAddress: :9997
+apiAllowOrigin: '*'
 
 # RTSP (Drone video ingest)
 rtsp: yes
