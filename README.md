@@ -250,6 +250,67 @@ curl http://localhost:9997/v3/paths/list
 | 5 | RTSP ingest | `ffmpeg … rtsp://localhost:8554/test` | Stream in API |
 | 6 | Multi-stream | Push VT001, VT100 | Both in API |
 | 7 | Browser | `http://PUBLIC_IP:8000/status` | JSON response |
+| 8 | Java MQTT Client | Spring Boot Paho connect | ✅ Connection test completed |
+
+---
+
+## ☕ Java/Spring Boot MQTT Client Test (Colleague Verified)
+
+> ✅ Tested on `2026-04-10` — **MQTT server connection test completed**
+> Spring Boot app ကနေ Mosquitto Broker သို့ ချိတ်ဆက်ခြင်း အောင်မြင်ပါသည်။
+
+### Setup
+| Item | Detail |
+|------|--------|
+| **Language** | Java 17 |
+| **Framework** | Spring Boot 3.5.13 |
+| **MQTT Client** | Eclipse Paho `mqttv3` v1.2.5 |
+| **Build Tool** | Maven |
+| **Package** | `com.drone.station.stationcontrol` |
+
+### Maven Dependencies (pom.xml)
+```xml
+<!-- MQTT Client -->
+<dependency>
+    <groupId>org.eclipse.paho</groupId>
+    <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+    <version>1.2.5</version>
+</dependency>
+
+<!-- Spring AMQP -->
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-amqp</artifactId>
+</dependency>
+```
+
+### Connection Config (application.yml)
+```yaml
+mqtt:
+  broker: tcp://15.165.59.154:1883
+  clientId: spring-station-client
+  topics:
+    - station/docks/#
+    - station/drones/#
+```
+
+### Architecture (Java Client ↔ MQTT Server)
+```
+┌──────────────────────────┐
+│  Spring Boot App (Java)  │
+│  Paho MQTT Client v1.2.5 │
+│  com.drone.station       │
+└──────────┬───────────────┘
+           │
+    tcp://15.165.59.154:1883
+           │
+           ▼
+┌──────────────────────────┐
+│  Our MQTT Server (EC2)   │
+│  Mosquitto :1883         │
+│  drone-mqtt container    │
+└──────────────────────────┘
+```
 
 
 ### Dock Topics
