@@ -546,3 +546,317 @@ mosquitto_pub -h localhost -t 'station/docks/DOCK01/status' \
 mosquitto_pub -h localhost -t 'station/drones/DJI001/telemetry' \
   -m '{"lat":16.8661,"lon":96.1951,"alt":120,"battery":72,"state":"flying"}'
 ```
+
+---
+
+---
+
+# 🆕 Update — WebRTC + RTMP + DJI MQTT OSD (April 2026)
+
+> **Changes Made:** WebRTC low-latency browser streaming enabled, RTMP input added, DJI Cloud API MQTT topics fixed.
+> **Files changed:** `mediamtx/mediamtx.yml` · `docker-compose.yml` · `station-api/mqtt_handler.py`
+
+---
+
+## 🎥 Change 1 — WebRTC & RTMP Enabled (mediamtx.yml)
+
+### What Changed
+
+| Feature | Before | After |
+|---------|--------|-------|
+| WebRTC | ❌ Disabled | ✅ **Enabled** `:8889` (~0.5s latency) |
+| RTMP input | ❌ Disabled | ✅ **Enabled** `:1935` (OBS/FFmpeg push) |
+| HLS | ✅ `:8888` | ✅ `:8888` (unchanged — fallback) |
+| RTSP ingest | ✅ `:8554` | ✅ `:8554` (unchanged) |
+
+### RTMP → WebRTC Workflow
+
+```
+OBS / FFmpeg
+     │
+     │  rtmp://SERVER_IP:1935/live/mystream
+     ▼
+MediaMTX (Port 1935)
+     │  Auto transmux (no re-encode)
+     │  RTMP/FLV → WebRTC/UDP
+     ▼
+Browser viewer
+     http://SERVER_IP:8889/live/mystream
+     (~0.5 second latency)
+```
+
+### Full mediamtx.yml (Copy-Ready)
+
+```yaml
+###############################################
+# MediaMTX — Drone Station (RTSP + WebRTC + RTMP)
+###############################################
+logLevel: info
+logDestinations: [stdout]
+
+authMethod: internal
+authInternalUsers:
+- user: any
+  pass:
+  ips: []
+  permissions:
+  - action: publish
+    path:
+  - action: read
+    path:
+  - action: playback
+    path:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+api: yes
+apiAddress: :9997
+apiAllowOrigin: '*'
+
+# Drone RTSP ingest
+rtsp: yes
+rtspAddress: :8554
+
+# OBS / FFmpeg RTMP push input  ← NEW
+rtmp: yes
+rtmpAddress: :1935
+
+# HLS browser fallback (3-6s delay)
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAllowOrigin: '*'
+
+srt: no
+
+# WebRTC low-latency (~0.5s)  ← NEW
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+# ⚠️ CHANGE THIS to your EC2 public IP:
+webrtcICEUDPMuxAddress: YOUR_EC2_PUBLIC_IP:8890
+
+pathDefaults:
+  source: publisher
+  record: yes
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordSegmentDuration: 1h
+  recordDeleteAfter: 7d
+
+paths:
+  all_others:
+```
+
+> ⚠️ **One thing to change:** Replace `YOUR_EC2_PUBLIC_IP` with your actual EC2 elastic/public IP (e.g. `15.164.50.229`)
+
+---
+
+## 🐳 Change 2 — Docker Compose Ports Updated (docker-compose.yml)
+
+Three new ports added to the `rtsp` (MediaMTX) service:
+
+```yaml
+# mediamtx service — ports section (updated)
+ports:
+  - "8554:8554"        # RTSP ingest (drone streams)
+  - "1935:1935"        # RTMP ingest (OBS / FFmpeg)   ← NEW
+  - "8888:8888"        # HLS playback (browser fallback)
+  - "8889:8889"        # WebRTC signaling HTTP         ← NEW
+  - "8890:8890/udp"    # WebRTC ICE UDP media          ← NEW
+  - "9997:9997"        # MediaMTX Control API
+```
+
+### Full Port Reference (Updated)
+
+| Port | Protocol | Service | Purpose |
+|------|----------|---------|---------|
+| 22 | TCP | EC2 | SSH |
+| 1883 | TCP | Mosquitto | MQTT (Dock/Drone) |
+| 9001 | TCP | Mosquitto | MQTT WebSocket |
+| 8554 | TCP | MediaMTX | RTSP drone ingest |
+| **1935** | **TCP** | **MediaMTX** | **RTMP (OBS/FFmpeg)** ← NEW |
+| 8888 | TCP | MediaMTX | HLS browser fallback |
+| **8889** | **TCP** | **MediaMTX** | **WebRTC signaling** ← NEW |
+| **8890** | **UDP** | **MediaMTX** | **WebRTC ICE media** ← NEW |
+| 9997 | TCP | MediaMTX | MediaMTX API |
+| 8000 | TCP | Station API | REST endpoints |
+
+---
+
+## 📡 Change 3 — DJI Cloud API MQTT Topics Fixed (mqtt_handler.py)
+
+### Problem
+The original `mqtt_handler.py` only listened to **custom topics** (`station/docks/+/status`).
+DJI dock sends telemetry on **DJI Cloud API topics** (`thing/product/{sn}/osd`) — these were never parsed, causing the "OSD broken" display.
+
+### Fix — New subscriptions added
+
+```python
+# Now subscribes to ALL 4 DJI Cloud API topic patterns:
+client.subscribe("thing/product/+/osd")             # Dock telemetry
+client.subscribe("thing/product/+/events")           # cover_open, etc.
+client.subscribe("thing/product/+/services")         # Commands sent
+client.subscribe("thing/product/+/services_reply")   # Command results
+```
+
+### DJI OSD Fields Explained
+
+```json
+{
+  "cover_state": 1,          // 0=CLOSED, 1=OPEN
+  "putter_state": 2,         // 0=RETRACTED, 1=MOVING, 2=EXTENDED
+  "temperature": 27.4,       // Inside dock °C
+  "humidity": 38.9,          // Humidity %
+  "wind_speed": 0.0,         // Wind m/s
+  "rainfall": 0,             // 0=none
+  "emergency_stop_state": 0, // 0=normal
+  "drone_charge_state": {
+    "state": 0,              // 0=not charging
+    "capacity_percent": 0    // Drone battery %
+  }
+}
+```
+
+### New Clean Log Output (Before vs After)
+
+**Before (broken/truncated):**
+```
+2026-04-17T17:02:25Z | thing/product/5P7tbXBdP5AQJB9nRwsz/osd |
+{"air_conditioner":{"air_conditioner_state":0,"max_temperature":35...  ← cut off!
+```
+
+**After (clean, human-readable):**
+```
+[OSD]  🏠 Dock 5P7tbXB.. | Cover:OPEN Putter:EXTENDED | Temp:27.4°C Hum:38.9% Wind:0.0m/s | Battery:0%
+[EVENT] 🔔 5P7tbXB.. | method=cover_open result=0 status=ok
+[SVC]  ⚙️  5P7tbXB.. | cover_open → in_progress
+```
+
+### New API Methods Available
+
+```python
+# Get latest DJI dock telemetry
+station.get_dji_osd("5P7tbXBdP5AQJB9nRwsz")
+
+# Get last 20 DJI events
+station.get_dji_events(limit=20)
+
+# Send DJI service command (e.g. open dock cover)
+station.send_dji_service("5P7tbXBdP5AQJB9nRwsz", "cover_open")
+```
+
+---
+
+## 🚀 Step-by-Step Redeploy Guide
+
+### Step 1 — Open AWS Security Group (New Ports)
+
+Go to **AWS Console → EC2 → Security Groups → Inbound Rules → Edit**:
+
+Add these 3 new rules:
+
+| Port | Protocol | Source | Purpose |
+|------|----------|--------|---------|
+| 1935 | TCP | 0.0.0.0/0 | RTMP (OBS/FFmpeg input) |
+| 8889 | TCP | 0.0.0.0/0 | WebRTC signaling |
+| 8890 | UDP | 0.0.0.0/0 | WebRTC ICE media (UDP!) |
+
+### Step 2 — Update mediamtx.yml on EC2
+
+```bash
+ssh ubuntu@YOUR_EC2_IP
+cd ~/drone-station-server
+
+# Edit the one required line — set your EC2 public IP:
+nano mediamtx/mediamtx.yml
+# Change: webrtcICEUDPMuxAddress: YOUR_EC2_PUBLIC_IP:8890
+# Example: webrtcICEUDPMuxAddress: 15.164.50.229:8890
+```
+
+### Step 3 — Pull Latest Code (if using git)
+
+```bash
+cd ~/drone-station-server
+git pull origin main
+```
+
+### Step 4 — Restart All Containers
+
+```bash
+cd ~/drone-station-server
+docker compose down
+docker compose up -d
+```
+
+### Step 5 — Verify All Containers Running
+
+```bash
+docker compose ps
+```
+
+Expected output:
+```
+NAME                IMAGE                              STATUS    PORTS
+drone-mqtt          eclipse-mosquitto:2                Up        :1883, :9001
+drone-rtsp          bluenviron/mediamtx:latest         Up        :8554, :1935, :8888, :8889, :8890/udp, :9997
+drone-station-api   drone-station-server-station-api   Up        :8000
+```
+
+### Step 6 — Test WebRTC (Browser)
+
+**Push stream from OBS:**
+```
+Settings → Stream → Service: Custom
+Server:     rtmp://YOUR_EC2_IP/live/mystream
+Stream Key: mystream
+```
+
+**View in browser:**
+```
+http://YOUR_EC2_IP:8889/live/mystream
+```
+
+### Step 7 — Test WebRTC with FFmpeg (no OBS needed)
+
+```bash
+# Push a test stream via RTMP from EC2 itself
+ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 \
+  -c:v libx264 -preset ultrafast -b:v 1M \
+  -f flv rtmp://localhost/live/teststream
+
+# Then open browser: http://YOUR_EC2_IP:8889/live/teststream
+```
+
+### Step 8 — Test DJI MQTT OSD
+
+```bash
+# Watch DJI dock OSD topic
+mosquitto_sub -h localhost -t 'thing/product/#' -v
+
+# Simulate DJI dock OSD message
+mosquitto_pub -h localhost -t 'thing/product/5P7tbXBdP5AQJB9nRwsz/osd' \
+  -m '{"tid":"abc","bid":"def","timestamp":946761224605,"gateway":"5P7tbXBdP5AQJB9nRwsz","data":{"cover_state":1,"putter_state":2,"temperature":27.4,"humidity":38.9,"wind_speed":0.0,"rainfall":0,"emergency_stop_state":0,"drone_charge_state":{"state":0,"capacity_percent":85}}}'
+```
+
+Expected station-api log:
+```
+[OSD]  🏠 Dock 5P7tbXB.. | Cover:OPEN Putter:EXTENDED | Temp:27.4°C Hum:38.9% Wind:0.0m/s | Battery:85%
+```
+
+### Step 9 — Full Verification Checklist
+
+| # | Test | Command | Expected |
+|---|------|---------|----------|
+| 1 | Containers up | `docker compose ps` | 3 containers Up, all ports shown |
+| 2 | RTSP API | `curl localhost:9997/v3/paths/list` | `{"items":[]}` (no error) |
+| 3 | Station API | `curl localhost:8000/status` | `{"mqtt":"connected"...}` |
+| 4 | RTMP ingest | FFmpeg push to `:1935` | Stream appears at `:9997` |
+| 5 | WebRTC view | Browser `http://IP:8889/live/teststream` | Live video, ~0.5s latency |
+| 6 | DJI OSD | `mosquitto_pub` to `thing/product/+/osd` | Clean log line in station-api |
+| 7 | DJI events | `mosquitto_pub` to `thing/product/+/events` | `[EVENT]` line in logs |
+
+---
+
+*Updated: April 2026 — WebRTC + RTMP + DJI Cloud API MQTT*
