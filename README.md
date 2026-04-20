@@ -860,3 +860,165 @@ Expected station-api log:
 ---
 
 *Updated: April 2026 — WebRTC + RTMP + DJI Cloud API MQTT*
+
+---
+
+## 🚀 Git Push & EC2 Redeploy (Full Workflow)
+
+> Run this after **any config change** on your local machine to push and redeploy on EC2.
+
+### Step 1 — Push Changes from Local Machine (WSL) to GitHub
+
+```bash
+# On your LOCAL machine (WSL):
+cd ~/drone-station-server
+
+git add mediamtx/mediamtx.yml \
+        docker-compose.yml \
+        station-api/mqtt_handler.py \
+        .env.example \
+        README.md
+
+git commit -m "feat: enable WebRTC+RTMP, fix DJI MQTT OSD topics"
+git push origin main
+```
+
+---
+
+### Step 2 — SSH into EC2
+
+```bash
+ssh ubuntu@15.165.59.154
+```
+
+---
+
+### Step 3 — Pull Latest Code on EC2
+
+```bash
+cd ~/drone-station-server
+git pull origin main
+```
+
+---
+
+### Step 4 — Set Your EC2 Public IP in mediamtx.yml
+
+> ⚠️ **Do this once only** — only if you haven't set it yet
+
+```bash
+nano mediamtx/mediamtx.yml
+```
+
+Find this line and replace with your real public IP:
+```yaml
+# Change this:
+webrtcICEUDPMuxAddress: YOUR_EC2_PUBLIC_IP:8890
+
+# To your actual EC2 public IP, e.g:
+webrtcICEUDPMuxAddress: 15.165.59.154:8890
+```
+
+Save: `Ctrl+X` → `Y` → `Enter`
+
+---
+
+### Step 5 — Open 3 New Ports in AWS Security Group
+
+> AWS Console → EC2 → Security Groups → your group → Inbound Rules → Edit → Add rule
+
+| Port | Protocol | Source | Purpose |
+|------|----------|--------|---------|
+| `1935` | TCP | 0.0.0.0/0 | RTMP (OBS/FFmpeg input) |
+| `8889` | TCP | 0.0.0.0/0 | WebRTC signaling |
+| `8890` | **UDP** | 0.0.0.0/0 | WebRTC ICE media ⚠️ UDP |
+
+---
+
+### Step 6 — Restart All Containers
+
+```bash
+cd ~/drone-station-server
+docker compose down
+docker compose up -d
+```
+
+---
+
+### Step 7 — Verify Containers & Ports
+
+```bash
+docker compose ps
+```
+
+Expected:
+```
+NAME                IMAGE                              STATUS    PORTS
+drone-mqtt          eclipse-mosquitto:2                Up        0.0.0.0:1883->1883, 0.0.0.0:9001->9001
+drone-rtsp          bluenviron/mediamtx:latest         Up        0.0.0.0:1935->1935, 0.0.0.0:8554->8554
+                                                                 0.0.0.0:8888->8888, 0.0.0.0:8889->8889
+                                                                 0.0.0.0:8890->8890/udp, 0.0.0.0:9997->9997
+drone-station-api   drone-station-server-station-api   Up        0.0.0.0:8000->8000
+```
+
+---
+
+### Step 8 — Test WebRTC in Browser
+
+**Option A — OBS Studio:**
+```
+Settings → Stream → Service: Custom
+Server:      rtmp://15.165.59.154/live/mystream
+Stream Key:  mystream
+```
+Then open browser: `http://15.165.59.154:8889/live/mystream`
+
+**Option B — FFmpeg (no OBS needed):**
+```bash
+# Run on EC2 itself
+ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 \
+  -c:v libx264 -preset ultrafast -b:v 1M \
+  -f flv rtmp://localhost/live/test
+```
+Then open browser: `http://15.165.59.154:8889/live/test`
+
+---
+
+### Step 9 — Test DJI MQTT OSD
+
+```bash
+# Subscribe to watch DJI dock topics
+mosquitto_sub -h localhost -t 'thing/product/#' -v
+
+# Simulate DJI dock OSD (in another terminal)
+mosquitto_pub -h localhost \
+  -t 'thing/product/5P7tbXBdP5AQJB9nRwsz/osd' \
+  -m '{"tid":"abc","bid":"def","timestamp":946761224605,
+       "gateway":"5P7tbXBdP5AQJB9nRwsz",
+       "data":{"cover_state":1,"putter_state":2,
+               "temperature":27.4,"humidity":38.9,
+               "wind_speed":0.0,"rainfall":0,
+               "drone_charge_state":{"state":0,"capacity_percent":85}}}'
+```
+
+Expected station-api log:
+```
+[OSD]  🏠 Dock 5P7tbXB.. | Cover:OPEN Putter:EXTENDED | Temp:27.4°C Hum:38.9% Wind:0.0m/s | Battery:85%
+```
+
+---
+
+### ✅ Final Checklist
+
+| # | Check | Command | Expected |
+|---|-------|---------|----------|
+| 1 | Git pushed | `git log --oneline -1` | latest commit visible |
+| 2 | EC2 pulled | `git status` | `up to date` |
+| 3 | Containers up | `docker compose ps` | 3 × Up, all ports |
+| 4 | Station API | `curl localhost:8000/status` | `mqtt: connected` |
+| 5 | RTSP ingest | `curl localhost:9997/v3/paths/list` | no error |
+| 6 | WebRTC test | Browser `http://IP:8889/live/test` | live video ✅ |
+| 7 | DJI MQTT OSD | `mosquitto_pub` simulate | clean `[OSD]` log ✅ |
+
+---
+*Deployed on: EC2 `ip-10-10-2-210` (Ubuntu 24.04) | Public IP: `15.165.59.154`*
