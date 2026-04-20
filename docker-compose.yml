@@ -22,9 +22,12 @@ services:
     container_name: drone-rtsp
     restart: unless-stopped
     ports:
-      - "8554:8554"   # RTSP ingest
-      - "8888:8888"   # HLS playback
-      - "9997:9997"   # MediaMTX API
+      - "8554:8554"        # RTSP ingest (drone streams)
+      - "1935:1935"        # RTMP ingest (OBS / FFmpeg)
+      - "8888:8888"        # HLS playback (browser fallback)
+      - "8889:8889"        # WebRTC signaling HTTP
+      - "8890:8890/udp"    # WebRTC ICE UDP media (low-latency)
+      - "9997:9997"        # MediaMTX Control API
     volumes:
       - ./mediamtx/mediamtx.yml:/mediamtx.yml
       - recordings:/recordings

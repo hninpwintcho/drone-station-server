@@ -1,5 +1,6 @@
 ###############################################
-# MediaMTX — Drone Station RTSP Server
+# MediaMTX — Drone Station RTSP/WebRTC/RTMP Server
+# Updated: Added WebRTC (low-latency browser) + RTMP input
 ###############################################
 
 logLevel: info
@@ -27,26 +28,35 @@ api: yes
 apiAddress: :9997
 apiAllowOrigin: '*'
 
-# RTSP (Drone video ingest)
+# ── RTSP (Drone video ingest from vessels) ────────────────────────
 rtsp: yes
 rtspAddress: :8554
 
-# RTMP (disabled — not needed for station)
-rtmp: no
+# ── RTMP (OBS / FFmpeg input → WebRTC output) ────────────────────
+# Enable this if your colleagues/operators push via OBS or FFmpeg
+rtmp: yes
+rtmpAddress: :1935
 
-# HLS (Browser playback)
+# ── HLS (Browser fallback — higher latency 3-6s) ─────────────────
 hls: yes
 hlsAddress: :8888
 hlsVariant: lowLatency
 hlsAllowOrigin: '*'
 
-# SRT (disabled)
+# ── SRT (disabled) ────────────────────────────────────────────────
 srt: no
 
-# WebRTC (disabled)
-webrtc: no
+# ── WebRTC (Low-latency browser playback — ~0.5s) ─────────────────
+# Access: http://SERVER_IP:8889/STREAM_PATH
+# RTMP → WebRTC: push to rtmp://SERVER_IP/live/mystream
+#                view at http://SERVER_IP:8889/live/mystream
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no              # HTTP mode (change to yes for HTTPS/prod)
+# ⚠️  Set this to your EC2 PUBLIC IP or private IP:
+webrtcICEUDPMuxAddress: :8890    # Use EC2 public IP in production, e.g. 15.164.50.229:8890
 
-# Path defaults
+# ── Path defaults ─────────────────────────────────────────────────
 pathDefaults:
   source: publisher
 
