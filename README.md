@@ -1022,3 +1022,94 @@ Expected station-api log:
 
 ---
 *Deployed on: EC2 `ip-10-10-2-210` (Ubuntu 24.04) | Public IP: `15.165.59.154`*
+
+
+PowerShell:
+Perfect. Use this exact command in your PowerShell:
+
+powershell
+ffmpeg -re -i "file.mp4.mp4" `
+  -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p `
+  -c:a aac -b:a 128k `
+  -f flv rtmp://15.165.59.154:1935/live/test
+
+ffmpeg -f dshow -i video="Integrated Camera":audio="Microphone Array (Intel® Smart Sound Technology for Digital Microphones)" `
+  -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 60 `
+  -c:a aac -b:a 128k `
+  -f flv rtmp://15.165.59.154:1935/live/test
+
+Once you start this, you will see frame= numbers starting to count up. When they reach about 30, open your browser to:
+
+🔗 Watch here: http://15.165.59.154:8889/live/test
+
+How to install ffmped at my power shell 
+The easiest way to install FFmpeg on Windows using PowerShell is using Winget (the built-in Windows Package Manager).
+
+Run these commands in your PowerShell:
+
+1. Install FFmpeg
+powershell
+winget install "FFmpeg (Shared)"
+(If it asks to agree to terms, type Y and press Enter)
+
+2. Refresh Environment Variables
+After installing, you need to tell PowerShell that a new program is available. You can just close and reopen PowerShell, or run this command:
+
+powershell
+$env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+3. Verify it works
+Type this to confirm:
+
+powershell
+ffmpeg -version
+Alternative (if Winget doesn't work)
+If for some reason Winget fails, you can use Chocolatey:
+
+powershell
+# Run this only if you have Chocolatey installed
+choco install ffmpeg
+Once installed, find your camera name:
+Run this to see your webcam name for the stream:
+
+powershell
+ffmpeg -list_devices true -f dshow -i dummy
+
+🎉 IT WORKED! Full WebRTC Pipeline Proven!
+Looking at the Docker logs carefully — everything worked perfectly:
+
+log
+[RTMP] [conn 172.18.0.1:50346] closed: EOF          ← FFmpeg pushed stream ✅
+[path live/test] [recorder] recording stopped        ← Stream was recorded ✅
+[WebRTC] [session 06fcadfb] created by 16.171.14.114 ← Browser connected via WebRTC ✅
+[WebRTC] [session 06fcadfb] closed: terminated       ← Session ended when stream stopped ✅
+[HLS] [muxer live/test] created                      ← HLS also worked ✅
+And FFmpeg stats confirm the stream ran healthy for 1 minute 15 seconds:
+
+frame=2253  fps=30  time=00:01:15  bitrate=1004kbits/s  speed=1.01x
+📋 Evidence Report for Your Engineer
+Send this to your engineer:
+
+✅ MEDIAMTX WEBRTC TEST — PASSED
+1. RTMP Ingest:
+   FFmpeg → rtmp://localhost:1935/live/test
+   2253 frames @ 30fps, 1000kbps, 75 seconds ✅
+2. WebRTC Viewer Session:
+   [WebRTC] session 06fcadfb created by 16.171.14.114 ✅
+3. HLS Fallback:
+   [HLS] muxer live/test created ✅
+4. Recording:
+   [recorder] recording stopped (stored to /recordings) ✅
+Server: 15.165.59.154
+Ports open: 1935/TCP, 8554/TCP, 8888/TCP, 8889/TCP, 8890/UDP
+MediaMTX: v1.17.1 running in Docker ✅
+Now run a live stream to keep it active:
+bash
+# Run as nohup so it stays running even if SSH disconnects
+nohup ffmpeg -re -f lavfi -i testsrc=size=1280x720:rate=30 \
+  -c:v libx264 -preset ultrafast -b:v 1M \
+  -f flv rtmp://localhost:1935/live/test \
+  > /tmp/ffmpeg.log 2>&1 &
+echo "Streaming PID: $!"
+# Browser:
+# http://15.165.59.154:8889/live/test  ← WebRTC
+# http://15.165.59.154:8888/live/test  ← HLS
